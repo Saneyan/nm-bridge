@@ -1,0 +1,145 @@
+#!/sbin/runscript
+#
+# net.bridge
+#
+# Edit these values as necessary.
+#
+# @rev    G-0.0.1
+# @update 2014-2-12
+# @author Saneyuki Tadokoro <saneyan@mail.gfunction.com>
+
+#
+# Define network interfaces
+#
+#  +--------------------+
+#  |   Virtual Bridge   |
+#  +---+------+-----+---+
+#      |      |     |
+#    +----  +--+  +---+
+#    |eth|  |iw|  |tap|
+#    +----  +--+  +---+
+#
+
+# br: virtual bridge device
+br=""
+
+# gw: default gateway of the bridge
+gw=""
+
+# sm: subnet mask
+sm=""
+
+# brd: broadcast address
+brd=""
+
+#
+# nic | auto_nic: network interface cards 
+#
+# The format of "auto_nic": <device_name>/<mode>
+#   <device_name> [MUST] [*]   : The device name
+#   <mode>        [OPTION] [p] : Mode
+#
+# The format of "nic": <device_name>/<mode>/<ip>/<netmask>/<broadcast>
+#   <device_name> [MUST] [*]   : The device name
+#   <mode>        [MUST] [p/n] : Mode
+#   <ip>          [MUST] [*]   : IP address
+#   <netmask>     [MUST] [*]   : Subnet mask
+#   <broadcast>   [MUST] [*]   : Broadcast address
+#
+# [MUST]     : Must be defined
+# [OPTIONAL] : Optional value
+#
+# e.g. nic=("eth0/p" "eth1")
+#      auto_nic=("eth2/p/192.168.0.1/255.255.255.0/192.168.0.255")
+#
+nic=()
+auto_nic=()
+
+# tap: virtual ethernet devices
+tap=()
+
+function _isrv()
+{
+  rc-service $1 $2 $3
+}
+
+function _dnwrap()
+{
+  echo "net.${1}"
+}
+
+function start()
+{
+  local i= r=
+
+  modprobe tun
+
+  brctl addbr $br
+
+  for i in $auto_nic; do
+    local id=($(echo $i | sed "s/\// /g"))
+
+    echo "${id[0]}: $(ifconfig ${id[0]} | grep -E "inet ([0-9]{1,3}\.){3}[0-9]{1,3}" | sed "s/.*inet //" | sed "s/ *netmask.*//")"
+
+    if [ "${id[1]}" = "p" ]; then
+      ifconfig ${id[0]} 0.0.0.0 promisc up
+    else
+      ifconfig ${id[0]} 0.0.0.0 up
+    fi
+
+    brctl addif $br $id
+  done
+
+  for i in $nic; do
+    local id=($(echo $i | sed "s/\// /g"))
+    _isrv $(_dnwrap $i) start
+
+    if [ "$id[1]" = "p" ]; then
+      ifconfig ${id[0]} ${id[2]} netmask ${id[3]} broadcast ${id[4]} promisc up
+    else
+      ifconfig ${id[0]} ${id[2]} netmask ${id[3]} broadcast ${id[4]} up
+    fi
+
+    brctl addif $br $id
+  done
+
+  for i in $tap; do
+    tunctl
+    ifconfig $i 0.0.0.0 promisc up
+  done
+
+  ifconfig $br $gw netmask $sm brd $brd
+
+  _isrv $(_dnwrap $br) start
+  _isrv -e NetworkManager; [ $? -eq 0 ] && _isrv NetworkManager start
+
+  exit 0
+}
+
+function stop()
+{
+  local i=
+
+  ifconfig $br down
+  brctl delbr $br
+
+  for i in $nic; do
+    brctl delif $br $i
+    _isrv $(_dnwrap $i) stop
+  done
+
+  for i in $auton_nic; do brctl delif $br $i; done
+  for i in $tap; do tunctl -d $i; done
+
+  _isrv $(_dnwrap $br) stop
+  _isrv -e NetworkManager; [ $? -eq 0 ] && _isrv NetworkManager stop
+
+  exit 0
+}
+
+function restart()
+{
+  stop
+  start
+  exit 0
+}
